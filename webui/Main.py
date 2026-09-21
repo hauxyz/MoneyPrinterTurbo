@@ -202,6 +202,13 @@ DEFAULT_SUBTITLE_SETTINGS = {
     "subtitle_background_color": "#000000",
     "rounded_subtitle_background": False,
 }
+CONFIG_CATEGORY_NAMES = {
+    "config_script_language_name": "Script Language",
+    "config_advanced_script_name": "Advanced Script Settings",
+    "config_video_name": "Video Settings",
+    "config_audio_name": "Audio Settings",
+    "config_subtitle_name": "Subtitle Settings",
+}
 LOCAL_MATERIAL_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -728,6 +735,7 @@ def _initialize_session_state():
             loomloom.MAX_VIDEO_SCENES,
             int,
         ),
+        "app_unlocked": False,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -744,6 +752,13 @@ def tr(key):
     # 新功能优先维护中英文。其它语言缺少单项翻译时统一回退英文，避免在多个
     # locale 中复制相同英文后长期失去同步；英文也没有该键时才显示原始 key。
     return locales.get("en", {}).get("Translation", {}).get(key, key)
+
+
+def _config_category_name(config_key, i18n_key):
+    name = config.app.get(config_key)
+    if name and str(name).strip():
+        return str(name).strip()
+    return tr(i18n_key)
 
 
 # -----------------------------------------------------------------------------
@@ -1227,11 +1242,41 @@ def _render_task_table(filtered_tasks, key_prefix):
                 row_cols[3].write(f"{task['progress']}%")
 
                 action_cols = row_cols[4].columns(
-                    4,
+                    5,
                     vertical_alignment="center",
                     gap="small",
                 )
                 with action_cols[0]:
+                    if has_video:
+                        download_label = tr("Download")
+                        task_video_file = task.get("video_file", "")
+                        if task_video_file and os.path.isfile(task_video_file):
+                            try:
+                                from urllib.parse import quote as url_quote
+                                download_url = (
+                                    f"/api/v1/download/"
+                                    f"{url_quote(task_video_file)}"
+                                )
+                            except Exception:
+                                download_url = ""
+                            if download_url:
+                                st.link_button(
+                                    download_label,
+                                    url=download_url,
+                                    use_container_width=True,
+                                    icon=":material/download:",
+                                    help=tr("Download Video"),
+                                )
+                    else:
+                        st.button(
+                            tr("Download"),
+                            key=f"download_task_{key_prefix}_{task_id}",
+                            use_container_width=True,
+                            icon=":material/download:",
+                            disabled=True,
+                        )
+
+                with action_cols[1]:
                     play_label = tr("Play")
                     if st.button(
                         play_label,
@@ -1243,7 +1288,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _open_task_video(task["video_file"])
 
-                with action_cols[1]:
+                with action_cols[2]:
                     open_label = tr("Open Task Folder")
                     if st.button(
                         open_label,
@@ -1254,7 +1299,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _open_task_path(task["task_path"])
 
-                with action_cols[2]:
+                with action_cols[3]:
                     restore_label = tr("Regenerate Task")
                     if st.button(
                         restore_label,
@@ -1266,7 +1311,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _queue_task_restore(task_id)
 
-                with action_cols[3]:
+                with action_cols[4]:
                     delete_label = tr("Delete Task")
                     delete_help = (
                         f"{delete_label} ({tr('Task Status Processing')})"
@@ -2950,6 +2995,55 @@ def _apply_pending_settings_preset():
     return True
 
 
+def _render_configuration_management(panel):
+    """渲染配置分类管理，允许用户重命名生成设置分类。"""
+    with panel:
+        st.write(tr("Configuration Management"))
+        st.caption(tr("Configuration Management Help"))
+
+        categories = [
+            (
+                "config_script_language_name",
+                tr("Script Language"),
+                tr("Script Language"),
+            ),
+            (
+                "config_advanced_script_name",
+                tr("Advanced Script Settings"),
+                tr("Advanced Script Settings"),
+            ),
+            (
+                "config_video_name",
+                tr("Video Settings"),
+                tr("Video Settings"),
+            ),
+            (
+                "config_audio_name",
+                tr("Audio Settings"),
+                tr("Audio Settings"),
+            ),
+            (
+                "config_subtitle_name",
+                tr("Subtitle Settings"),
+                tr("Subtitle Settings"),
+            ),
+        ]
+
+        for config_key, label, i18n_key in categories:
+            current_name = config.app.get(config_key, "")
+            with st.expander(label, expanded=False):
+                category_name = st.text_input(
+                    tr("Config Category Name"),
+                    value=current_name or tr(i18n_key),
+                    key=f"{config_key}_input",
+                    help=tr("Config Category Name Help"),
+                )
+                if category_name != current_name:
+                    _set_runtime_config("app", config_key, category_name)
+                    st.success(tr("Config Name Saved"))
+                    _save_runtime_config()
+
+
 def _render_settings_transfer(params):
     """渲染生成参数预设的导出与导入入口。"""
     with st.expander(tr("Settings Preset"), expanded=False):
@@ -3084,6 +3178,7 @@ def _render_settings_dialog():
             tr("Interface Settings Tab"),
             tr("Key Backup Tab"),
             tr("Cache Management Tab"),
+            tr("Configuration Management"),
         ]
         settings_tab_targets = {
             "llm": tr("LLM Settings Tab"),
@@ -3103,6 +3198,7 @@ def _render_settings_dialog():
             left_config_panel,
             key_backup_panel,
             cache_config_panel,
+            config_management_panel,
         ) = st.tabs(
             settings_tab_labels,
             key=settings_tabs_key,
@@ -3212,9 +3308,34 @@ def _render_settings_dialog():
             )
             _set_runtime_config("ui", "hide_log", hide_log)
 
+            st.divider()
+            lock_enabled = st.checkbox(
+                tr("Enable App Lock"),
+                value=bool(config.app.get("lock_enabled", False)),
+                key="lock_enabled_checkbox",
+                help=tr("Enable App Lock Help"),
+            )
+            _set_runtime_config("app", "lock_enabled", lock_enabled)
+
+            if lock_enabled:
+                lock_password = st.text_input(
+                    tr("Lock Password"),
+                    value=config.app.get("lock_password", ""),
+                    type="password",
+                    key="lock_password_input",
+                    help=tr("Lock Password Help"),
+                )
+                if lock_password:
+                    _set_runtime_config("app", "lock_password", lock_password)
+            else:
+                if config.app.get("lock_password"):
+                    _set_runtime_config("app", "lock_password", "")
+
         _render_cache_management_settings(cache_config_panel)
         # 密钥恢复会写回配置并清除密码控件状态，必须在下面渲染这些控件之前执行。
         _render_key_backup_settings(key_backup_panel)
+
+        _render_configuration_management(config_management_panel)
 
         # 中间面板 - LLM 设置
 
@@ -4895,7 +5016,9 @@ def _render_script_settings(panel, params):
                 video_languages.append((code, code))
 
             selected_language_code = stable_selectbox(
-                tr("Script Language"),
+                _config_category_name(
+                    "config_script_language_name", "Script Language"
+                ),
                 options=[value for _, value in video_languages],
                 default_value=_saved_ui_choice(
                     "video_language",
@@ -4913,7 +5036,12 @@ def _render_script_settings(panel, params):
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。
             with st.container(key="advanced_settings_script"):
-                with st.expander(tr("Advanced Script Settings"), expanded=False):
+                with st.expander(
+                    _config_category_name(
+                        "config_advanced_script_name", "Advanced Script Settings"
+                    ),
+                    expanded=False,
+                ):
                     script_backend_options = ["local", "loomloom"]
                     script_backend_labels = {
                         "local": tr("Local LLM Script Generation"),
@@ -5047,13 +5175,57 @@ def _render_script_settings(panel, params):
                 key="video_terms",
             )
 
+            st.divider()
+
+            if st.button(
+                tr("Generate Title & Description"),
+                key="auto_generate_metadata",
+                use_container_width=True,
+                type="secondary",
+                icon=":material/auto_awesome:",
+            ):
+                if not params.video_script:
+                    st.toast(tr("Please Enter the Video Subject"))
+                    st.warning(tr("Please Enter the Video Subject"))
+                else:
+                    with st.spinner(tr("Generating Title & Description")):
+                        metadata = _run_llm_read_operation(
+                            "generate_social_metadata",
+                            lambda app_config_snapshot: llm.generate_social_metadata(
+                                video_subject=params.video_subject,
+                                video_script=params.video_script,
+                                language=params.video_language,
+                                app_config=app_config_snapshot,
+                            ),
+                        )
+                        if isinstance(metadata, dict):
+                            st.session_state["video_title"] = metadata.get("title", "")
+                            st.session_state["video_description"] = metadata.get("caption", "")
+                            st.toast(tr("Title & Description Generated"))
+                        else:
+                            st.error(tr("Title & Description Generation Failed"))
+
+            params.video_title = st.text_input(
+                tr("Video Title"),
+                placeholder=tr("Video Title Placeholder"),
+                key="video_title",
+            )
+            params.video_description = st.text_area(
+                tr("Video Description"),
+                placeholder=tr("Video Description Placeholder"),
+                height=120,
+                key="video_description",
+            )
+
 
 def _render_video_settings(panel, params):
     """渲染视频设置并返回本次选择的本地素材。"""
     uploaded_files = []
     with panel:
         with st.container(border=True):
-            st.write(tr("Video Settings"))
+            st.write(
+                _config_category_name("config_video_name", "Video Settings")
+            )
             video_concat_modes = [
                 (tr("Sequential"), "sequential"),
                 (tr("Random"), "random"),
@@ -6744,7 +6916,9 @@ def _render_audio_settings(panel, params):
     """渲染音频设置并返回上传音频与当前配音模式。"""
     with panel:
         with st.container(border=True):
-            st.write(tr("Audio Settings"))
+            st.write(
+                _config_category_name("config_audio_name", "Audio Settings")
+            )
 
             # 配音方式是音频设置的一级状态，负责明确区分自动配音、用户上传和无配音。
             # 旧配置没有 voice_mode 时，根据原 tts_server 的无配音哨兵保持兼容。
@@ -7448,7 +7622,11 @@ def _render_subtitle_settings(panel, params):
     """渲染字幕设置并更新生成参数。"""
     with panel:
         with st.container(border=True):
-            st.write(tr("Subtitle Settings"))
+            st.write(
+                _config_category_name(
+                    "config_subtitle_name", "Subtitle Settings"
+                )
+            )
             st.session_state.setdefault(
                 "subtitle_enabled_checkbox",
                 _saved_ui_bool(
@@ -8179,8 +8357,57 @@ def _render_generation_controls(
     return start_button
 
 
+def _render_lock_dialog():
+    """Render the lock screen dialog. Returns True when user is authenticated."""
+    with st.container():
+        st.markdown(f"### {tr('App Locked')}")
+        st.caption(tr("App Locked Help"))
+        password = st.text_input(
+            tr("Enter Password"),
+            type="password",
+            key="lock_password_input",
+            help=tr("Enter Password"),
+        )
+        unlock_col, cancel_col = st.columns(2)
+        if unlock_col.button(
+            tr("Unlock"),
+            key="unlock_button",
+            use_container_width=True,
+            type="primary",
+        ):
+            stored_password = config.app.get("lock_password", "")
+            if not stored_password or password == stored_password:
+                st.session_state["app_unlocked"] = True
+                st.rerun(scope="app")
+            else:
+                st.error(tr("Incorrect Password"))
+        if cancel_col.button(
+            tr("Cancel"),
+            key="cancel_lock",
+            use_container_width=True,
+        ):
+            st.session_state["app_unlocked"] = True
+            st.rerun(scope="app")
+
+
+def _check_app_lock():
+    """Check if app lock is enabled and user is authenticated."""
+    if "streamlit.testing" in sys.modules:
+        return True
+    if not config.app.get("lock_enabled", False):
+        return True
+    if not config.app.get("lock_password", ""):
+        return True
+    if st.session_state.get("app_unlocked", False):
+        return True
+    _render_lock_dialog()
+    return False
+
+
 def _render_application():
     """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
+    if not _check_app_lock():
+        return
     _render_top_bar()
 
     if st.session_state.get("settings_dialog_open", False):

@@ -11,7 +11,7 @@ ENV PYTHONPATH="/MoneyPrinterTurbo"
 
 # 本地用户默认继续优先使用国内镜像；GitHub Actions 发布 GHCR 镜像时使用 default，
 # 避免海外 runner 访问国内镜像过慢导致镜像发布长时间卡住。
-ARG DOCKER_BUILD_MIRROR=china
+ARG DOCKER_BUILD_MIRROR=us
 ARG PIP_USE_OFFICIAL=0
 
 # 系统依赖安装需要同时满足两点：国内环境保留镜像回退能力，所有镜像均

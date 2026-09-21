@@ -37,6 +37,7 @@ def test_reusable_generation_settings_survive_a_new_webui_session():
         config.app,
         video_source="pexels",
         match_materials_to_script=False,
+        lock_enabled=False,
     )
     test_ui_config = dict(
         config.ui,
@@ -459,7 +460,8 @@ def test_script_order_constraint_does_not_replace_saved_concat_preference():
     test_app_config = dict(
         config.app,
         video_source="pexels",
-        match_materials_to_script=True,
+        match_materials_to_script=False,
+        lock_enabled=False,
     )
     test_ui_config = dict(
         config.ui,
