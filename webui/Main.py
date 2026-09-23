@@ -1432,71 +1432,71 @@ def _render_config_manager_entry():
         _render_config_manager_panel(store, count)
 
 
+@st.dialog("Configurations", width="large")
 def _render_config_manager_panel(store, count):
-    with st.modal(tr("Configurations"), width="large"):
-        col_head, col_close = st.columns([1, 3])
-        with col_head:
-            st.subheader(tr("Configurations"))
-        with col_close:
-            if st.button(tr("Close"), key="config_close", type="secondary"):
-                st.session_state["show_config_manager"] = False
-                st.rerun(scope="app")
+    col_head, col_close = st.columns([1, 3])
+    with col_head:
+        st.subheader(tr("Configurations"))
+    with col_close:
+        if st.button(tr("Close"), key="config_close", type="secondary"):
+            st.session_state["show_config_manager"] = False
+            st.rerun(scope="app")
 
-        edit_key = st.session_state.pop("config_edit_key", None)
-        new_name = st.session_state.get("config_new_name")
-        new_platform = st.session_state.get("config_new_platform")
+    edit_key = st.session_state.pop("config_edit_key", None)
+    new_name = st.session_state.get("config_new_name")
+    new_platform = st.session_state.get("config_new_platform")
 
-        if edit_key is not None or new_name is not None:
-            _render_config_form(store, edit_key, new_name, new_platform)
-            return
+    if edit_key is not None or new_name is not None:
+        _render_config_form(store, edit_key, new_name, new_platform)
+        return
 
-        if count == 0:
-            st.caption(tr("No Config"))
-            if st.button(tr("New Config"), key="config_new", use_container_width=True):
-                st.session_state["config_new_name"] = ""
-                st.session_state["config_new_platform"] = "tiktok"
-                st.rerun(scope="app")
-            return
+    if count == 0:
+        st.caption(tr("No Config"))
+        if st.button(tr("New Config"), key="config_new", use_container_width=True):
+            st.session_state["config_new_name"] = ""
+            st.session_state["config_new_platform"] = "tiktok"
+            st.rerun(scope="app")
+        return
 
-        configs = []
-        for key in store.list_keys("config"):
-            data = store.get("config", key, {})
-            configs.append((key, data))
-        configs.sort(key=lambda x: x[1].get("updated_at", 0), reverse=True)
+    configs = []
+    for key in store.list_keys("config"):
+        data = store.get("config", key, {})
+        configs.append((key, data))
+    configs.sort(key=lambda x: x[1].get("updated_at", 0), reverse=True)
 
-        selected_key = st.selectbox(
-            tr("Select Config"),
-            options=[c[0] for c in configs],
-            key="config_manager_select",
-            format_func=lambda k: next(
-                (name for name, d in configs if name == k), k
-            ),
+    selected_key = st.selectbox(
+        tr("Select Config"),
+        options=[c[0] for c in configs],
+        key="config_manager_select",
+        format_func=lambda k: next(
+            (name for name, d in configs if name == k), k
+        ),
+    )
+
+    if selected_key:
+        config_data = store.get("config", selected_key, {})
+        platform = config_data.get("platform", "tiktok")
+        st.markdown(f"**{tr('Current Config')}**: {selected_key}")
+        st.caption(
+            f"{tr('Config Platform')}: {platform} · "
+            f"{len(config_data.get('settings', {}))} settings"
         )
 
-        if selected_key:
-            config_data = store.get("config", selected_key, {})
-            platform = config_data.get("platform", "tiktok")
-            st.markdown(f"**{tr('Current Config')}**: {selected_key}")
-            st.caption(
-                f"{tr('Config Platform')}: {platform} · "
-                f"{len(config_data.get('settings', {}))} settings"
-            )
-
-            col_load, col_edit, col_delete = st.columns(3)
-            with col_load:
-                if st.button(tr("Load Config"), key="config_load"):
-                    settings = config_data.get("settings", {})
-                    st.session_state["config_load_settings"] = settings
-                    st.success(tr("Config Loaded"))
-            with col_edit:
-                if st.button(tr("Edit Config"), key="config_edit"):
-                    st.session_state["config_edit_key"] = selected_key
-                    st.rerun(scope="app")
-            with col_delete:
-                if st.button(tr("Delete Config"), key="config_delete", type="secondary"):
-                    store.delete("config", selected_key)
-                    st.success(tr("Config Deleted"))
-                    st.rerun(scope="app")
+        col_load, col_edit, col_delete = st.columns(3)
+        with col_load:
+            if st.button(tr("Load Config"), key="config_load"):
+                settings = config_data.get("settings", {})
+                st.session_state["config_load_settings"] = settings
+                st.success(tr("Config Loaded"))
+        with col_edit:
+            if st.button(tr("Edit Config"), key="config_edit"):
+                st.session_state["config_edit_key"] = selected_key
+                st.rerun(scope="app")
+        with col_delete:
+            if st.button(tr("Delete Config"), key="config_delete", type="secondary"):
+                store.delete("config", selected_key)
+                st.success(tr("Config Deleted"))
+                st.rerun(scope="app")
 
 
 def _render_config_form(store, edit_key=None, new_name=None, new_platform=None):
