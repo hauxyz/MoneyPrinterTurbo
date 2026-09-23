@@ -57,6 +57,7 @@ from app.services import (
     volcengine_seedance,
     voice,
     webui_task,
+    sqlite_store,
 )
 from app.services import elevenlabs_music as elevenlabs_music_service
 from app.services import sonilo as sonilo_service
@@ -1413,6 +1414,146 @@ def _render_task_manager_entry():
             _render_task_manager_panel(task_summaries)
 
 
+def _render_config_manager_entry():
+    with st.container(key="config_manager_entry", width="content"):
+        if st.button(
+            tr("Configurations"),
+            key="config_manager_button",
+            type="secondary",
+            icon=":material/folder:",
+            use_container_width=True,
+        ):
+            st.session_state["show_config_manager"] = True
+            st.rerun(scope="app")
+
+    if st.session_state.get("show_config_manager", False):
+        store = sqlite_store.get_store()
+        count = len(store.list_keys("config"))
+        _render_config_manager_panel(store, count)
+
+
+def _render_config_manager_panel(store, count):
+    with st.modal(tr("Configurations"), width="large"):
+        col_head, col_close = st.columns([1, 3])
+        with col_head:
+            st.subheader(tr("Configurations"))
+        with col_close:
+            if st.button(tr("Close"), key="config_close", type="secondary"):
+                st.session_state["show_config_manager"] = False
+                st.rerun(scope="app")
+
+        edit_key = st.session_state.pop("config_edit_key", None)
+        new_name = st.session_state.get("config_new_name")
+        new_platform = st.session_state.get("config_new_platform")
+
+        if edit_key is not None or new_name is not None:
+            _render_config_form(store, edit_key, new_name, new_platform)
+            return
+
+        if count == 0:
+            st.caption(tr("No Config"))
+            if st.button(tr("New Config"), key="config_new", use_container_width=True):
+                st.session_state["config_new_name"] = ""
+                st.session_state["config_new_platform"] = "tiktok"
+                st.rerun(scope="app")
+            return
+
+        configs = []
+        for key in store.list_keys("config"):
+            data = store.get("config", key, {})
+            configs.append((key, data))
+        configs.sort(key=lambda x: x[1].get("updated_at", 0), reverse=True)
+
+        selected_key = st.selectbox(
+            tr("Select Config"),
+            options=[c[0] for c in configs],
+            key="config_manager_select",
+            format_func=lambda k: next(
+                (name for name, d in configs if name == k), k
+            ),
+        )
+
+        if selected_key:
+            config_data = store.get("config", selected_key, {})
+            platform = config_data.get("platform", "tiktok")
+            st.markdown(f"**{tr('Current Config')}**: {selected_key}")
+            st.caption(
+                f"{tr('Config Platform')}: {platform} · "
+                f"{len(config_data.get('settings', {}))} settings"
+            )
+
+            col_load, col_edit, col_delete = st.columns(3)
+            with col_load:
+                if st.button(tr("Load Config"), key="config_load"):
+                    settings = config_data.get("settings", {})
+                    st.session_state["config_load_settings"] = settings
+                    st.success(tr("Config Loaded"))
+            with col_edit:
+                if st.button(tr("Edit Config"), key="config_edit"):
+                    st.session_state["config_edit_key"] = selected_key
+                    st.rerun(scope="app")
+            with col_delete:
+                if st.button(tr("Delete Config"), key="config_delete", type="secondary"):
+                    store.delete("config", selected_key)
+                    st.success(tr("Config Deleted"))
+                    st.rerun(scope="app")
+
+
+def _render_config_form(store, edit_key=None, new_name=None, new_platform=None):
+    is_new = edit_key is None
+    title = tr("New Config") if is_new else tr("Edit Config")
+
+    with st.form("config_form"):
+        st.subheader(title)
+        name = st.text_input(
+            tr("Config Name"),
+            value=new_name or edit_key or "",
+            key="config_name_input",
+            help=tr("Config Name Help"),
+        )
+        platform = st.selectbox(
+            tr("Config Platform"),
+            options=["tiktok", "youtube", "instagram"],
+            index=["tiktok", "youtube", "instagram"].index(
+                new_platform or "tiktok"
+            ),
+            key="config_platform_select",
+            help=tr("Config Platform Help"),
+        )
+
+        col_save, col_cancel = st.columns(2)
+        with col_save:
+            save_clicked = st.form_submit_button(tr("Save"), type="primary")
+        with col_cancel:
+            cancel_clicked = st.form_submit_button(tr("Cancel"), type="secondary")
+
+    if cancel_clicked:
+        st.session_state.pop("config_edit_key", None)
+        st.session_state.pop("config_new_name", None)
+        st.session_state.pop("config_new_platform", None)
+        st.rerun(scope="app")
+
+    if save_clicked and name:
+        settings_payload = {}
+        for key in ("video_subject", "video_script", "video_terms"):
+            if key in st.session_state:
+                settings_payload[key] = st.session_state[key]
+        config_obj = {
+            "platform": platform,
+            "settings": settings_payload,
+        }
+        if edit_key:
+            store.set("config", edit_key, config_obj)
+            st.success(tr("Config Updated"))
+        else:
+            store.set("config", name, config_obj)
+            st.success(tr("Config Created"))
+        st.session_state.pop("config_edit_key", None)
+        st.session_state.pop("config_new_name", None)
+        st.session_state.pop("config_new_platform", None)
+        st.rerun(scope="app")
+
+
 def _load_task_restore_payload(task_id):
     tasks_root = os.path.realpath(utils.task_dir())
     task_path = os.path.realpath(os.path.join(tasks_root, str(task_id)))
@@ -1767,6 +1908,7 @@ def _render_top_bar():
             width="stretch",
         ):
             _render_task_manager_entry()
+            _render_config_manager_entry()
 
             st.button(
                 tr("Settings"),
@@ -2995,11 +3137,90 @@ def _apply_pending_settings_preset():
     return True
 
 
-def _render_configuration_management(panel):
-    """渲染配置分类管理，允许用户重命名生成设置分类。"""
+def _render_configuration_management(panel, params=None):
+    """渲染配置分类管理和 Profile 管理。"""
     with panel:
         st.write(tr("Configuration Management"))
         st.caption(tr("Configuration Management Help"))
+
+        st.divider()
+        st.subheader(tr("Profile"))
+
+        store = sqlite_store.get_store()
+
+        profiles = store.list_keys("profile")
+        profile_names = [""] + profiles
+        selected_profile = st.selectbox(
+            tr("Select Profile"),
+            options=profile_names,
+            key="profile_select",
+            help=tr("Select Profile"),
+        )
+
+        if selected_profile:
+            profile_data = store.get("profile", selected_profile, {})
+            platform = profile_data.get("platform", "tiktok")
+            settings = profile_data.get("settings", {})
+        else:
+            platform = "tiktok"
+            settings = {}
+
+        with st.form("profile_form"):
+            profile_name = st.text_input(
+                tr("Profile Name"),
+                value=selected_profile or "",
+                key="profile_name_input",
+                help=tr("Profile Name Help"),
+            )
+            profile_platform = st.selectbox(
+                tr("Profile Platform"),
+                options=["tiktok", "youtube", "instagram"],
+                index=["tiktok", "youtube", "instagram"].index(platform)
+                if platform in ["tiktok", "youtube", "instagram"]
+                else 0,
+                key="profile_platform_select",
+                help=tr("Profile Platform Help"),
+            )
+
+            col_save, col_load, col_delete = st.columns(3)
+            with col_save:
+                save_clicked = st.form_submit_button(
+                    tr("Save Profile"), type="primary"
+                )
+            with col_load:
+                load_clicked = st.form_submit_button(tr("Load Profile"))
+            with col_delete:
+                delete_clicked = st.form_submit_button(
+                    tr("Delete Profile"), type="secondary"
+                )
+
+        if save_clicked and profile_name:
+            settings_data = params.model_dump(mode="json") if hasattr(params, "model_dump") else {}
+            profile_obj = {
+                "platform": profile_platform,
+                "settings": settings_data,
+            }
+            store.set("profile", profile_name, profile_obj)
+            st.success(tr("Profile Saved"))
+            st.rerun(scope="app")
+
+        if load_clicked and selected_profile:
+            profile_data = store.get("profile", selected_profile, {})
+            settings = profile_data.get("settings", {})
+            if settings and hasattr(params, "__dict__"):
+                for key, value in settings.items():
+                    if hasattr(params, key):
+                        setattr(params, key, value)
+            st.success(tr("Profile Loaded"))
+            st.rerun(scope="app")
+
+        if delete_clicked and selected_profile:
+            store.delete("profile", selected_profile)
+            st.success(tr("Profile Deleted"))
+            st.rerun(scope="app")
+
+        st.divider()
+        st.subheader(tr("Category Names"))
 
         categories = [
             (
@@ -3178,7 +3399,6 @@ def _render_settings_dialog():
             tr("Interface Settings Tab"),
             tr("Key Backup Tab"),
             tr("Cache Management Tab"),
-            tr("Configuration Management"),
         ]
         settings_tab_targets = {
             "llm": tr("LLM Settings Tab"),
@@ -3187,8 +3407,8 @@ def _render_settings_dialog():
         settings_tabs_key = localized_widget_key("settings_dialog_tabs")
         target_tab = st.session_state.pop("settings_dialog_target_tab", None)
         if target_tab in settings_tab_targets:
-            # st.tabs 使用显示 label 作为状态值。入口按钮只保存稳定业务 ID，
-            # 到这里再写入当前语言的 label，即可精确定位且兼容语言切换。
+            # st.tabs sử dụng display label làm trạng thái. Nút vào chỉ lưu stable business ID,
+            # đến đây mới ghi label theo ngôn ngữ hiện tại, để định vị chính xác và tương thích với ngôn ngữ.
             st.session_state[settings_tabs_key] = settings_tab_targets[target_tab]
 
         (
@@ -3198,7 +3418,6 @@ def _render_settings_dialog():
             left_config_panel,
             key_backup_panel,
             cache_config_panel,
-            config_management_panel,
         ) = st.tabs(
             settings_tab_labels,
             key=settings_tabs_key,
@@ -3334,8 +3553,6 @@ def _render_settings_dialog():
         _render_cache_management_settings(cache_config_panel)
         # 密钥恢复会写回配置并清除密码控件状态，必须在下面渲染这些控件之前执行。
         _render_key_backup_settings(key_backup_panel)
-
-        _render_configuration_management(config_management_panel)
 
         # 中间面板 - LLM 设置
 
@@ -4798,21 +5015,45 @@ def _render_loomloom_script_generation(params):
     if not effective_token:
         st.warning(tr("Shengsuan Cloud API Key Required"))
 
-    candidate_col, duration_col = st.columns(2)
-    candidate_count = candidate_col.number_input(
-        tr("Script Candidate Count"),
-        min_value=1,
-        max_value=loomloom.MAX_SCRIPT_CANDIDATES,
-        step=1,
-        key="loomloom_candidate_count",
-    )
-    duration_seconds = duration_col.number_input(
-        tr("Target Script Duration Seconds"),
-        min_value=10,
-        max_value=600,
-        step=10,
-        key="loomloom_script_duration_seconds",
-    )
+    duration_presets = [
+        (tr("Script Duration Preset 1m"), 60),
+        (tr("Script Duration Preset 5m"), 300),
+        (tr("Script Duration Preset 15m"), 900),
+        (tr("Script Duration Preset 20m"), 1200),
+        (tr("Script Duration Preset 30m"), 1800),
+    ]
+    candidate_col, preset_col, duration_col = st.columns([0.3, 0.4, 0.3])
+    with candidate_col:
+        candidate_count = candidate_col.number_input(
+            tr("Script Candidate Count"),
+            min_value=1,
+            max_value=loomloom.MAX_SCRIPT_CANDIDATES,
+            step=1,
+            key="loomloom_candidate_count",
+        )
+    with preset_col:
+        preset_btn_key = localized_widget_key("loomloom_duration_preset")
+        selected_preset = st.session_state.get(preset_btn_key, "")
+        preset_buttons = st.columns(len(duration_presets))
+        for i, (label, seconds) in enumerate(duration_presets):
+            if preset_buttons[i].button(
+                label,
+                key=f"{preset_btn_key}_{seconds}",
+                use_container_width=True,
+                type="secondary" if selected_preset != str(seconds) else "primary",
+                icon=":material/timer:",
+            ):
+                st.session_state["loomloom_script_duration_seconds"] = seconds
+                st.session_state[preset_btn_key] = str(seconds)
+                st.rerun(scope="fragment")
+    with duration_col:
+        duration_seconds = duration_col.number_input(
+            tr("Target Script Duration Seconds"),
+            min_value=10,
+            max_value=1800,
+            step=10,
+            key="loomloom_script_duration_seconds",
+        )
     _set_runtime_config("ui", "loomloom_candidate_count", int(candidate_count))
     _set_runtime_config(
         "ui", "loomloom_script_duration_seconds", int(duration_seconds)
@@ -5032,6 +5273,29 @@ def _render_script_settings(panel, params):
             )
             params.video_language = selected_language_code
             _set_runtime_config("ui", "video_language", params.video_language)
+
+            duration_presets = [
+                (tr("Script Duration Preset 1m"), 60),
+                (tr("Script Duration Preset 5m"), 300),
+                (tr("Script Duration Preset 15m"), 900),
+                (tr("Script Duration Preset 20m"), 1200),
+                (tr("Script Duration Preset 30m"), 1800),
+            ]
+            preset_dur_key = localized_widget_key("script_duration_preset")
+            preset_buttons = st.columns(len(duration_presets))
+            active_duration = st.session_state.get(
+                "script_duration_seconds", params.script_duration_seconds
+            )
+            for i, (label, seconds) in enumerate(duration_presets):
+                if preset_buttons[i].button(
+                    label,
+                    key=f"{preset_dur_key}_{seconds}",
+                    use_container_width=True,
+                    type="primary" if active_duration == seconds else "secondary",
+                    icon=":material/timer:",
+                ):
+                    st.session_state["script_duration_seconds"] = seconds
+                    st.rerun(scope="app")
 
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。
@@ -8358,8 +8622,28 @@ def _render_generation_controls(
 
 
 def _render_lock_dialog():
-    """Render the lock screen dialog. Returns True when user is authenticated."""
+    """渲染应用锁 dialog。"""
+    import time as _time
+
+    lock_logo = (
+        '<div style="display:flex;justify-content:center;margin:16px 0;">'
+        '<div style="width:64px;height:64px;border-radius:50%;'
+        'background:linear-gradient(135deg,#1E88E5,#42A5F5);'
+        'display:flex;align-items:center;justify-content:center;'
+        'font-size:28px;color:white;">🔒</div></div>'
+    )
+    st.markdown(lock_logo, unsafe_allow_html=True)
+
+    card_style = (
+        "max-width:400px;margin:0 auto;padding:24px;"
+        "border-radius:12px;border:1px solid #E0E0E0;"
+        "background:#FAFAFA;"
+    )
     with st.container():
+        st.markdown(
+            f'<div style="{card_style}">',
+            unsafe_allow_html=True,
+        )
         st.markdown(f"### {tr('App Locked')}")
         st.caption(tr("App Locked Help"))
         password = st.text_input(
@@ -8369,25 +8653,30 @@ def _render_lock_dialog():
             help=tr("Enter Password"),
         )
         unlock_col, cancel_col = st.columns(2)
-        if unlock_col.button(
-            tr("Unlock"),
-            key="unlock_button",
-            use_container_width=True,
-            type="primary",
-        ):
-            stored_password = config.app.get("lock_password", "")
-            if not stored_password or password == stored_password:
-                st.session_state["app_unlocked"] = True
-                st.rerun(scope="app")
-            else:
-                st.error(tr("Incorrect Password"))
-        if cancel_col.button(
-            tr("Cancel"),
-            key="cancel_lock",
-            use_container_width=True,
-        ):
-            st.session_state["app_unlocked"] = True
-            st.rerun(scope="app")
+        with unlock_col:
+            if st.button(
+                tr("Unlock"),
+                key="unlock_button",
+                use_container_width=True,
+                type="primary",
+                icon=":material/login:",
+            ):
+                stored_password = config.app.get("lock_password", "")
+                if not stored_password or password == stored_password:
+                    st.session_state["app_unlocked"] = True
+                    st.rerun(scope="app")
+                else:
+                    st.error(tr("Incorrect Password"))
+        with cancel_col:
+            if st.button(
+                tr("Cancel"),
+                key="cancel_lock",
+                use_container_width=True,
+                type="secondary",
+                icon=":material/close:",
+            ):
+                st.warning(tr("App Locked"))
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _check_app_lock():

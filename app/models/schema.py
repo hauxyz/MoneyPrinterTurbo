@@ -124,6 +124,7 @@ class VideoParams(BaseModel):
         None  # Custom audio file path, will ignore TTS and can still use Whisper subtitles
     )
     video_language: Optional[str] = ""  # auto detect
+    script_duration_seconds: int = 60  # Target duration for AI-generated script (seconds)
 
     voice_name: Optional[str] = ""
     voice_volume: Optional[float] = 1.0
